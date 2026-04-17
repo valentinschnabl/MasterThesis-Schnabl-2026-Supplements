@@ -3,58 +3,41 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 import numpy as np
 
-# --- Rich Imports ---
+# Rich output imports
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
 from rich import box
 from rich.text import Text
+import os
 
 console = Console()
+OUTPUT_DIR = "result"
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+PRIMARY_DATA_PATH = os.path.join(BASE_DIR, "sql", "dspace_data.csv")
 
 # ---------------------------------------------------------------------------
-# 1. DATA LOADING & CLEANING
+# 1. DATA LOADING AND PREPARATION
 # ---------------------------------------------------------------------------
 try:
-    df = pd.read_csv('dspace_data.csv', sep=None, engine='python', header=0,
+    df = pd.read_csv(PRIMARY_DATA_PATH, sep=None, engine='python', header=0,
                      names=['resource_id', 'start_time', 'end_time', 'workflow_stage', 'wait_time_hours'])
     df['workflow_stage'] = df['workflow_stage'].astype(str).str.strip()
+    console.print(f"[dim]Data loaded from: {PRIMARY_DATA_PATH}[/dim]")
 
-    # Convert start_time to datetime for the timeline
+    # Convert timestamp for monthly trend aggregation
     df['start_time'] = pd.to_datetime(df['start_time'])
     df['month_year'] = df['start_time'].dt.to_period('M').dt.to_timestamp()
 except Exception as e:
     console.print(f"[bold red]Error loading data:[/bold red] {e}")
     exit()
 
-# Rename stages for cleaner reporting
-
-
-def clean_stage_name(stage):
-    s = str(stage)
-    if 'Submit' in s and 'FIS' in s:
-        return 'FIS Validation'
-    if 'FIS' in s and 'Library' in s:
-        return 'Library Validation'
-    if 'Library' in s and ('Faculty' in s or 'Dean' in s):
-        return 'Faculty Validation'
-    if 'Rejected' in s and 'Resubmitted' in s:
-        return 'Author Revision'
-
-    if 'Rejected' in s:
-        return s  # Keep other rejection contexts if they exist
-
-    return s
-
-
-df['workflow_stage'] = df['workflow_stage'].apply(clean_stage_name)
-
-# --- CUSTOM SORTING LOGIC ---
-
 
 def get_stage_order(stages):
-    # Force Author Revision to the end of the sort
-    return sorted(stages, key=lambda x: (1 if x == 'Author Revision' else 0, x))
+    # Keep Resubmission at the end for stable chart order
+    return sorted(stages, key=lambda x: (1 if 'Resubmission' in x else 0, x))
 
 
 global_stage_order = get_stage_order(df['workflow_stage'].unique())
@@ -63,7 +46,7 @@ global_stage_order = get_stage_order(df['workflow_stage'].unique())
 # 2. VISUALIZATIONS
 # ---------------------------------------------------------------------------
 
-# --- DASHBOARD 1: DISTRIBUTION & SLA ---
+# Dashboard 1: distribution and SLA curve
 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(20, 8))
 
 sns.boxplot(
@@ -90,19 +73,20 @@ ax2.axhline(0.9, color='red', linestyle='--', alpha=0.3)
 plt.suptitle(
     f'DSpace Workflow Analysis 2023–2025 (Publications: {df["resource_id"].nunique():,})', fontsize=18)
 plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-plt.savefig('dspace_workflow.png', dpi=300)
-console.print("[dim]Dashboard saved: dspace_workflow.png[/dim]")
+save_path_1 = os.path.join(OUTPUT_DIR, 'dspace_workflow.png')
+plt.savefig(save_path_1, dpi=300)
+console.print(f"[dim]Dashboard saved: {save_path_1}[/dim]")
 
-# --- DASHBOARD 2: PERFORMANCE TRENDS WITH REGRESSION ---
+# Dashboard 2: performance trends with linear trend lines
 plt.figure(figsize=(15, 8))
 
-# Filter out skipped/auto items and extreme outliers for trendline
-trend_df = df[~((df['workflow_stage'] == 'Library Validation') & (df['wait_time_hours'] < 0.02)) &
+# Exclude near-zero bypasses and extreme outliers from trend fitting
+trend_df = df[~((df['workflow_stage'] == '2. Library Check') & (df['wait_time_hours'] < 0.02)) &
               (df['wait_time_hours'] <= 200)].copy()
 
-# Apply custom sorting to the trendline legend
+# Use consistent stage ordering in legend and colors
 stages = get_stage_order(trend_df['workflow_stage'].unique())
-palette = sns.color_palette("viridis", len(stages))
+palette = sns.color_palette("tab10", len(stages))
 
 sns.lineplot(data=trend_df, x='month_year', y='wait_time_hours', hue='workflow_stage',
              hue_order=stages, palette=palette, estimator='median', errorbar=None, linewidth=2, alpha=0.3)
@@ -138,34 +122,39 @@ plt.ylabel('Median Hours')
 plt.grid(True, which="both", ls="-", alpha=0.3)
 plt.legend(title='Stage & Trends', bbox_to_anchor=(1.05, 1), loc='upper left')
 plt.tight_layout()
-plt.savefig('workflow_trends.png')
-console.print("[dim]Trends chart saved: workflow_trends.png[/dim]")
+save_path_2 = os.path.join(OUTPUT_DIR, 'workflow_trends.png')
+plt.savefig(save_path_2)
+console.print(f"[dim]Trends chart saved: {save_path_2}[/dim]")
 
-# --- DASHBOARD 3: THE COST OF REJECTION ---
+# Dashboard 3: lifecycle cost by rejection path
 rejected_ids = df[df['workflow_stage'].str.contains(
-    'Author Revision|Rejected', na=False)]['resource_id'].unique()
+    'Resubmission')]['resource_id'].unique()
 
 df['path_type'] = df['resource_id'].apply(
     lambda x: 'Rejected at least once' if x in rejected_ids else 'Straight to Archive')
 
-plt.figure(figsize=(10, 6))
 lifecycle_costs = df.groupby(['resource_id', 'path_type'])[
     'wait_time_hours'].sum().reset_index()
+plt.figure(figsize=(10, 6))
 sns.barplot(
-    data=lifecycle_costs, x='path_type', y='wait_time_hours',
+    data=lifecycle_costs,
+    x='path_type',
+    y='wait_time_hours',
     hue='path_type',
-    palette=['#2ecc71', '#e74c3c'],
+    palette={'Rejected at least once': '#e74c3c',
+             'Straight to Archive': '#2ecc71'},
     errorbar=('ci', 95),
     legend=False
 )
 plt.title('The Penalty of a Mistake: Total lifecycle hours per item', fontsize=16)
 plt.ylabel('Total Hours in System')
-plt.savefig('rejection_cost.png')
-console.print("[dim]Rejection analysis saved: rejection_cost.png[/dim]")
+save_path_3 = os.path.join(OUTPUT_DIR, 'rejection_cost.png')
+plt.savefig(save_path_3)
+console.print(f"[dim]Rejection analysis saved: {save_path_3}[/dim]")
 
 
 # ---------------------------------------------------------------------------
-# 3. TEXT SUMMARY SECTION (Rich Formatting, 100% Accurate Data)
+# 3. TEXT SUMMARY
 # ---------------------------------------------------------------------------
 console.print()
 console.print(Panel.fit(
@@ -176,11 +165,11 @@ console.print(Panel.fit(
 ))
 console.print()
 
-# 1. Workflow Stage Statistics Table
+# 1. Workflow stage statistics table
 stats = df.groupby('workflow_stage')['wait_time_hours'].agg(
     ['median', 'mean', 'count', 'max']).reset_index()
 
-# Convert to categorical to enforce our custom sort order in the table
+# Convert to categorical to preserve stage order in output
 stats['workflow_stage'] = pd.Categorical(
     stats['workflow_stage'], categories=global_stage_order, ordered=True)
 stats = stats.sort_values('workflow_stage')
@@ -213,7 +202,7 @@ for _, row in stats.iterrows():
 console.print(table)
 console.print()
 
-# 2. Annual Trends Table
+# 2. Annual trends table
 trend_table = Table(
     box=box.ROUNDED,
     show_header=True,
@@ -242,7 +231,7 @@ for res in slowdown_results:
 console.print(trend_table)
 console.print()
 
-# 3. Aggregates & Rejection Costs Panel
+# 3. Aggregate bottleneck and rejection cost panel
 bottleneck = df.groupby('workflow_stage')['wait_time_hours'].sum().idxmax()
 total_wasted = df.groupby('workflow_stage')['wait_time_hours'].sum().max()
 
@@ -270,8 +259,8 @@ console.print(Panel(
 ))
 console.print()
 
-# 4. Wellness Check Panel
-lib_step = df[df['workflow_stage'] == 'Library Validation']
+# 4. Data integrity panel
+lib_step = df[df['workflow_stage'] == '2. Library Check']
 skipped_lib = lib_step[lib_step['wait_time_hours'] < 0.02]
 skip_rate = (len(skipped_lib) / len(lib_step)) * \
     100 if len(lib_step) > 0 else 0
@@ -288,5 +277,3 @@ console.print(Panel.fit(
     padding=(0, 2),
 ))
 console.print()
-
-plt.show()

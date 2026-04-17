@@ -13,12 +13,14 @@ import numpy as np
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
-from rich.columns import Columns
 from rich import box
 from rich.text import Text
-from rich.rule import Rule
+import os
 
 console = Console()
+
+OUTPUT_DIR = "result"
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # ---------------------------------------------------------------------------
 # 1. CONFIGURATION & PARAMETERS
@@ -125,12 +127,6 @@ VARIANT_STYLES = {
 }
 
 
-def _reduction_bar(pct: float, width: int = 20) -> str:
-    """ASCII progress bar for reduction percentage."""
-    filled = round(pct / 100 * width)
-    return f"[{'█' * filled}{'░' * (width - filled)}] {pct:.1f}%"
-
-
 def print_report(results_dict: dict[str, list[float]]) -> None:
     baseline_mean = statistics.mean(results_dict["AS-IS Baseline"])
 
@@ -227,8 +223,6 @@ def print_labor_breakdown(means_dict: dict) -> None:
         entry = cats["Entry"]
         val = cats["Validation"]
         total = entry + val
-        share = entry / total * 100
-
         table.add_row(
             Text(f"{icon} {name}", style=f"bold {color}"),
             Text(f"{entry:.1f} min", style="cyan"),
@@ -240,7 +234,7 @@ def print_labor_breakdown(means_dict: dict) -> None:
     console.print()
 
 # ---------------------------------------------------------------------------
-# 5. VISUALISATION (unchanged logic, same output)
+# 5. VISUALIZATION
 # ---------------------------------------------------------------------------
 
 
@@ -300,8 +294,9 @@ def plot_results(results_dict: dict[str, list[float]]) -> None:
     ax3.grid(linestyle="--", alpha=0.5)
 
     try:
-        plt.savefig("simulation_results.pdf", format="pdf", dpi=300)
-        console.print("[dim]  Charts saved → simulation_results.pdf[/dim]")
+        save_path_1 = os.path.join(OUTPUT_DIR, "simulation_results.pdf")
+        plt.savefig(save_path_1, format="pdf", dpi=300)
+        console.print(f"[dim]  Charts saved → {save_path_1}[/dim]")
     except Exception as exc:
         console.print(f"[red]Could not save PDF: {exc}[/red]")
 
@@ -314,26 +309,26 @@ def run_detailed_simulation(n_trials: int = N_TRIALS) -> dict:
     }
 
     for _ in range(n_trials):
-        # 1. AS-IS Baseline (Fixed: Added rework to Entry, sys_release to Validation)
+        # 1. AS-IS baseline
         entry = _tri(TIME_ASIS_ENTRY)
         val, rework = _asis_rejection_loop()
         components["AS-IS Baseline"]["Entry"].append(entry + rework)
         components["AS-IS Baseline"]["Validation"].append(
             val + _tri(TIME_SYS_RELEASE))
 
-        # 2. Procedural Streamlining (Fixed: Added sys_release)
+        # 2. Procedural streamlining
         components["Procedural Streamlining"]["Entry"].append(
             _tri(TIME_STREAMLINE_ENTRY))
         components["Procedural Streamlining"]["Validation"].append(
             _tri(TIME_1STEP_VALIDATION) + _tri(TIME_SYS_RELEASE))
 
-        # 3. Expert Operations (Fixed: Added sys_release)
+        # 3. Expert operations
         components["Expert Operations"]["Entry"].append(
             _tri(TIME_EXPERT_ENTRY))
         components["Expert Operations"]["Validation"].append(
             _tri(TIME_EXPERT_VALIDATION) + _tri(TIME_SYS_RELEASE))
 
-        # 4. Maximum Automation (Fixed: Added sys_release to both branches)
+        # 4. Maximum automation
         if random.random() <= PROB_DOI_AVAILABLE:
             components["Maximum Automation"]["Entry"].append(
                 _tri(TIME_MAX_AUTO_ENTRY))
@@ -382,9 +377,9 @@ def plot_stacked_bar_chart(means_dict: dict) -> None:
                 )
 
     plt.tight_layout()
-    plt.savefig("labor_composition_stacked_bar.pdf", format="pdf", dpi=300)
-    console.print(
-        "[dim]  Chart saved → labor_composition_stacked_bar.pdf[/dim]")
+    save_path_2 = os.path.join(OUTPUT_DIR, "labor_composition_stacked_bar.pdf")
+    plt.savefig(save_path_2, format="pdf", dpi=300)
+    console.print(f"[dim]  Chart saved → {save_path_2}[/dim]")
 
 # ---------------------------------------------------------------------------
 # 6. ENTRY POINT
